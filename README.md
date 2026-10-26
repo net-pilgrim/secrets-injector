@@ -20,6 +20,13 @@ When preloaded into a process, the library authenticates against a web vault usi
 - [Security Considerations](#security-considerations)
 - [Prerequisites & Building](#prerequisites--building)
 - [Usage Examples](#usage-examples)
+  - [Local Application](#local-application)
+  - [OCI Container & Sidecar (Zero Image Changes)](#oci-container--sidecar-zero-image-changes)
+    - [1. Kubernetes (Init Container - Recommended)](#1-kubernetes-init-container---recommended)
+    - [2. Kubernetes (Native Sidecar - K8s 1.28+)](#2-kubernetes-native-sidecar---k8s-128)
+    - [3. Docker Compose](#3-docker-compose)
+    - [4. Standalone Docker CLI](#4-standalone-docker-cli)
+  - [Embedding into Application Dockerfile](#embedding-into-application-dockerfile)
 - [Testing](#testing)
 - [Project Structure](#project-structure)
 
@@ -291,20 +298,155 @@ zig build -Dtarget=aarch64-linux -Doptimize=ReleaseSmall
 
 ## Usage Examples
 
-### Running a Python Application
+### Local Application
+
+Run any binary locally with `LD_PRELOAD`:
 
 ```bash
 SECRETS_VAULT_URL="https://vault.bitwarden.com/api/secrets" \
 SECRETS_FETCH_KEY="0.your_token" \
-LD_PRELOAD="/path/to/libsecrets_injector.so" \
+LD_PRELOAD="./bin/libsecrets_injector.so" \
 python3 -c 'import os; print("DB:", os.getenv("DATABASE_URL"))'
 ```
 
-### Running with Docker / Container Entrypoint
+---
 
-Add the library to `LD_PRELOAD` in your container environment or entrypoint wrapper:
+### OCI Container & Sidecar (Zero Image Changes)
+
+The library is published as a minimal OCI container image to GitHub Container Registry:
+
+```
+ghcr.io/net-pilgrim/secrets-injector:latest
+```
+
+By providing the library via an OCI container image, **no modifications or rebuilds to your application Docker image are needed**. The container writes `libsecrets_injector.so` to a shared volume mounted between the injector and your application container.
+
+The image supports two execution modes:
+- **Copy & Exit (Init Container)**: Copies the library into the shared mount directory and terminates (`exit 0`).
+- **Sidecar Mode**: Copies the library and remains running in standby mode (`sleep infinity`) for pods or platforms requiring active sidecars.
+
+#### 1. Kubernetes (Init Container - Recommended)
+
+Use an `initContainer` with a shared `emptyDir` volume. The injector mounts the shared volume at `/shared` (default) and immediately copies `libsecrets_injector.so` before your app starts:
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: my-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: my-app
+  template:
+    metadata:
+      labels:
+        app: my-app
+    spec:
+      volumes:
+        - name: injector-volume
+          emptyDir: {}
+
+      initContainers:
+        - name: secrets-injector
+          image: ghcr.io/net-pilgrim/secrets-injector:latest
+          volumeMounts:
+            - name: injector-volume
+              mountPath: /shared
+
+      containers:
+        - name: app
+          image: my-app:latest # Unmodified application image!
+          env:
+            - name: LD_PRELOAD
+              value: /injector/libsecrets_injector.so
+            - name: SECRETS_VAULT_URL
+              value: "https://vault.bitwarden.com/api/secrets"
+            - name: SECRETS_FETCH_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: vault-token
+                  key: token
+            # Optional injector settings:
+            # - name: SECRETS_INJECTOR_DEBUG
+            #   value: "1"
+            # - name: SECRETS_INJECTOR_FAIL_FAST
+            #   value: "1"
+          volumeMounts:
+            - name: injector-volume
+              mountPath: /injector
+              readOnly: true
+```
+
+#### 2. Kubernetes (Native Sidecar - K8s 1.28+)
+
+For Kubernetes clusters with `SidecarContainers` enabled (default in K8s 1.28+), add `restartPolicy: Always` and pass `sidecar` as an argument:
+
+```yaml
+      initContainers:
+        - name: secrets-injector
+          image: ghcr.io/net-pilgrim/secrets-injector:latest
+          restartPolicy: Always
+          args: ["sidecar"]
+          volumeMounts:
+            - name: injector-volume
+              mountPath: /shared
+```
+
+#### 3. Docker Compose
+
+In Docker Compose, use a named volume and wait for the injector service to complete:
+
+```yaml
+services:
+  secrets-injector:
+    image: ghcr.io/net-pilgrim/secrets-injector:latest
+    volumes:
+      - injector-volume:/shared
+
+  my-app:
+    image: my-company/my-app:latest
+    depends_on:
+      secrets-injector:
+        condition: service_completed_successfully
+    volumes:
+      - injector-volume:/injector:ro
+    environment:
+      - LD_PRELOAD=/injector/libsecrets_injector.so
+      - SECRETS_VAULT_URL=https://vault.internal/secrets
+      - SECRETS_FETCH_KEY=${VAULT_TOKEN}
+
+volumes:
+  injector-volume:
+```
+
+#### 4. Standalone Docker CLI
+
+Share the library using a named Docker volume:
+
+```bash
+# 1. Create a volume and copy the library into it
+docker volume create injector-volume
+docker run --rm -v injector-volume:/shared ghcr.io/net-pilgrim/secrets-injector:latest
+
+# 2. Run your application container with zero changes to its Dockerfile
+docker run --rm \
+  -v injector-volume:/injector:ro \
+  -e LD_PRELOAD=/injector/libsecrets_injector.so \
+  -e SECRETS_VAULT_URL="https://vault.bitwarden.com/api/secrets" \
+  -e SECRETS_FETCH_KEY="0.your_access_token..." \
+  python:3.11-slim python3 -c 'import os; print("Injected secret:", os.getenv("API_KEY"))'
+```
+
+---
+
+### Embedding into Application Dockerfile
+
+If you prefer building the library directly into your container image rather than mounting via a sidecar/init volume:
 
 ```dockerfile
+# Copy prebuilt library or from builder stage
 COPY bin/libsecrets_injector.so /usr/local/lib/libsecrets_injector.so
 ENV LD_PRELOAD=/usr/local/lib/libsecrets_injector.so
 
@@ -323,6 +465,9 @@ make test-unit
 
 # Run full integration test suite against a live mock web vault
 make test
+
+# Build local Docker image
+make docker-build
 ```
 
 ### Integration Test Suite Verification
@@ -343,8 +488,13 @@ The integration test suite validates:
 ## Project Structure
 
 ```
+├── .github/
+│   └── workflows/
+│       └── ci.yml          # GitHub Actions CI for tests & GHCR OCI image publishing
+├── Dockerfile              # Multi-stage OCI container build
+├── docker-entrypoint.sh    # Entrypoint supporting init & sidecar standby modes
 ├── build.zig               # Zig build script
-├── Makefile                # Convenient build & test targets
+├── Makefile                # Convenient build, test & docker targets
 ├── README.md               # Documentation
 ├── src/
 │   ├── injector.zig        # LD_PRELOAD hooks, memory scrubbing, C ABI exports
