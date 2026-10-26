@@ -29,6 +29,7 @@ When preloaded into a process, the library authenticates against a web vault usi
   - [Embedding into Application Dockerfile](#embedding-into-application-dockerfile)
 - [Testing](#testing)
 - [Project Structure](#project-structure)
+- [License](#license)
 
 ---
 
@@ -494,14 +495,21 @@ The integration test suite validates:
 ├── Dockerfile              # Multi-stage OCI container build
 ├── docker-entrypoint.sh    # Entrypoint supporting init & sidecar standby modes
 ├── build.zig               # Zig build script
+├── LICENSE                 # MIT License
 ├── Makefile                # Convenient build, test & docker targets
 ├── README.md               # Documentation
 ├── src/
 │   ├── injector.zig        # LD_PRELOAD hooks, memory scrubbing, C ABI exports
 │   ├── json_parser.zig     # Schema parser for Bitwarden, 1Password, Vault, and Dotenv
-│   └── vault_client.zig    # libcurl HTTP client and authentication handler
+│   └── vault_client.zig    # Native HTTP client and authentication handler
 └── test/
     ├── run_tests.sh        # Integration test runner
     ├── test_app.c          # Verification test application
     └── vault_server.py     # Multi-endpoint mock web vault server
 ```
+
+---
+
+## License
+
+This project is licensed under the [MIT License](LICENSE).
