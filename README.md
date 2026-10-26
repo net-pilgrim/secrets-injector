@@ -38,7 +38,7 @@ When preloaded into a process, the library authenticates against a web vault usi
 - **Universal Runtime Support**: Synchronizes secrets into `environ` at process startup so runtimes that snapshot environment variables (Python's `os.environ`, Node.js `process.env`, Go, Rust, Ruby) receive the secrets automatically.
 - **Automatic Schema Detection**: Native support for Bitwarden Secrets Manager, 1Password Connect, HashiCorp Vault (KV v1 & v2), flat JSON, and raw dotenv formats without manual configuration.
 - **Fetch Key Scrubbing**: Automatically zeroes out memory bytes of `SECRETS_FETCH_KEY` in `environ` and calls `unsetenv` before the target application's `main()` executes.
-- **Recursion & Re-entrancy Safe**: Thread-local execution guards prevent infinite recursion loops during dynamic linking, libc symbol resolution, or internal `libcurl` calls.
+- **Recursion & Re-entrancy Safe**: Thread-local execution guards prevent infinite recursion loops during dynamic linking, libc symbol resolution, or internal HTTP client calls.
 - **Lock-Free Lookups**: Read-only hash table lookups during application runtime introduce zero mutex contention or locking overhead.
 - **Small Footprint**: Compiled with Zig in `ReleaseSmall` mode to an ultra-compact ~199 KB shared library.
 
@@ -46,47 +46,26 @@ When preloaded into a process, the library authenticates against a web vault usi
 
 ## How It Works
 
-```
-                               Target Process Launch
-                                         │
-                                         ▼
-                      Dynamic Linker (ld.so) loads library
-                                         │
-                                         ▼
-               ELF Constructor (.init_array) executes before main()
-                                         │
-                     ┌───────────────────┴───────────────────┐
-                     ▼                                       ▼
-        No SECRETS_FETCH_KEY set                 SECRETS_FETCH_KEY found
-                     │                                       │
-            Passthrough mode                                 ▼
-         (Zero-overhead passthru)                 HTTP GET to SECRETS_VAULT_URL
-                                                  (Bearer / X-Vault-Token)
-                                                             │
-                                                             ▼
-                                                  Auto-detect vault schema
-                                                  (Bitwarden, 1Password, etc.)
-                                                             │
-                                                             ▼
-                                                  Populate in-memory store
-                                                  (std.StringHashMap)
-                                                             │
-                                                             ▼
-                                                  Sync to environ via setenv()
-                                                             │
-                                                             ▼
-                                                  Zero out & scrub fetch key
-                                                             │
-                                                             ▼
-                                                Target process main() runs
-                                                             │
-                                         ┌───────────────────┴───────────────────┐
-                                         ▼                                       ▼
-                             Call getenv("SECRET_KEY")               Call getenv("PATH")
-                                         │                                       │
-                                   Found in store                         Not in store
-                                         │                                       │
-                               Returns injected value                  Delegates to real libc
+```mermaid
+flowchart TD
+    A["Target Process Launch"] --> B["Dynamic Linker (ld.so / ld-musl) loads library"]
+    B --> C["ELF Constructor (.init_array) executes before main()"]
+
+    C --> D{"SECRETS_FETCH_KEY configured?"}
+
+    D -- "No" --> E["Passthrough Mode (Zero-overhead passthrough)"]
+    E --> J["Target Process main() runs"]
+
+    D -- "Yes" --> F["HTTP GET to SECRETS_VAULT_URL (Bearer / X-Vault-Token)"]
+    F --> G["Auto-detect Vault Schema (Bitwarden, 1Password, Vault KV, Dotenv)"]
+    G --> H["Populate In-Memory Store (std.StringHashMap)"]
+    H --> I["Sync to environ via setenv()"]
+    I --> K["Zero out and scrub SECRETS_FETCH_KEY from memory"]
+    K --> J
+
+    J --> L{"Application calls getenv(KEY)"}
+    L -- "Found in Secret Store" --> M["Return Injected Secret Value"]
+    L -- "Not in Secret Store" --> N["Delegate to Real libc getenv()"]
 ```
 
 ---
