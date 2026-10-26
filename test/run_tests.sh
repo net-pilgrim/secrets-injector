@@ -141,5 +141,18 @@ echo ">>> TEST 9 PASSED (1Password)!"
 
 echo ""
 echo "=================================================="
+echo "TEST 10: Explicit GLIBC Flavour Test"
+echo "=================================================="
+GLIBC_LIB="$(dirname "${LIB_PATH}")/libsecrets_injector_glibc.so"
+if [ -f "${GLIBC_LIB}" ]; then
+    SECRETS_VAULT_URL="http://127.0.0.1:${VAULT_PORT}/secrets" \
+    SECRETS_FETCH_KEY="${VAULT_KEY}" \
+    LD_PRELOAD="${GLIBC_LIB}" \
+    "${TEST_APP}" "DATABASE_URL" "postgresql://dbuser:supersecretpass@db.internal:5432/production"
+    echo ">>> TEST 10 PASSED (Glibc flavour)!"
+fi
+
+echo ""
+echo "=================================================="
 echo "ALL TESTS PASSED SUCCESSFULLY!"
 echo "=================================================="

@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xz-utils \
     ca-certificates \
     build-essential \
-    libcurl4-openssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN set -eux; \
@@ -29,7 +28,7 @@ COPY build.zig ./
 COPY src/ ./src/
 COPY test/ ./test/
 
-# Build optimized ReleaseSmall shared library and verify unit tests
+# Build optimized ReleaseSmall shared libraries (glibc and musl flavours) and verify unit tests
 RUN zig build -Doptimize=ReleaseSmall
 RUN zig build test-unit
 
@@ -37,15 +36,19 @@ RUN zig build test-unit
 FROM alpine:3.20
 
 LABEL org.opencontainers.image.title="secrets-injector" \
-      org.opencontainers.image.description="Transparent LD_PRELOAD secrets injector for containers" \
+      org.opencontainers.image.description="Transparent LD_PRELOAD secrets injector for glibc and musl containers" \
       org.opencontainers.image.source="https://github.com/net-pilgrim/secrets-injector"
 
 WORKDIR /secrets-injector
 
-# Install library into standard search paths
+# Install libraries into standard search paths
 COPY --from=builder /build/zig-out/lib/libsecrets_injector.so /usr/local/lib/libsecrets_injector.so
-RUN ln -s /usr/local/lib/libsecrets_injector.so /secrets-injector/libsecrets_injector.so && \
-    ln -s /usr/local/lib/libsecrets_injector.so /libsecrets_injector.so
+COPY --from=builder /build/zig-out/lib/libsecrets_injector_glibc.so /usr/local/lib/libsecrets_injector_glibc.so
+COPY --from=builder /build/zig-out/lib/libsecrets_injector_musl.so /usr/local/lib/libsecrets_injector_musl.so
+
+RUN ln -s /usr/local/lib/libsecrets_injector.so /libsecrets_injector.so && \
+    ln -s /usr/local/lib/libsecrets_injector_glibc.so /libsecrets_injector-glibc.so && \
+    ln -s /usr/local/lib/libsecrets_injector_musl.so /libsecrets_injector-musl.so
 
 COPY docker-entrypoint.sh /docker-entrypoint.sh
 RUN chmod +x /docker-entrypoint.sh

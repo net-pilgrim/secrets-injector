@@ -267,14 +267,14 @@ Because the injector hooks standard libc (`getenv`, `secure_getenv`) and updates
 ### Prerequisites
 
 - **Zig** (0.13.0 or later)
-- **libcurl** runtime libraries (`libcurl4` on Debian/Ubuntu)
+- No external HTTP or `libcurl` dependencies needed! The library uses Zig's built-in, native HTTP client (`std.http.Client`) with direct Linux syscalls.
 
 ### Building
 
 Build using the Zig build system or the included Makefile:
 
 ```bash
-# Build the optimized shared library and test harness
+# Build both Glibc and Musl shared libraries and test app
 make
 
 # Or directly with Zig
@@ -282,7 +282,9 @@ zig build -Doptimize=ReleaseSmall
 ```
 
 This generates:
-- `bin/libsecrets_injector.so` (the preload library)
+- `bin/libsecrets_injector.so` (default glibc library)
+- `bin/libsecrets_injector_glibc.so` (glibc flavour for Debian, Ubuntu, RHEL, CentOS, Fedora, etc.)
+- `bin/libsecrets_injector_musl.so` (musl flavour for Alpine Linux, Distroless-static, etc.)
 - `bin/test_app` (test verification binary)
 
 ### Cross-Compilation
@@ -319,11 +321,22 @@ The library is published as a minimal OCI container image to GitHub Container Re
 ghcr.io/net-pilgrim/secrets-injector:latest
 ```
 
-By providing the library via an OCI container image, **no modifications or rebuilds to your application Docker image are needed**. The container writes `libsecrets_injector.so` to a shared volume mounted between the injector and your application container.
+By providing the library via an OCI container image, **no modifications or rebuilds to your application Docker image are needed**. The container writes the injector libraries to a shared volume mounted between the injector and your application container.
+
+#### Workload Compatibility: Glibc & Musl (Alpine)
+
+Workloads in container environments typically use either **glibc** (Debian, Ubuntu, RHEL, CentOS, Fedora, Amazon Linux, Node, Python) or **musl** (Alpine Linux). The OCI container automatically provides optimized flavours for both:
+
+| Workload OS | Recommended `LD_PRELOAD` path | Description |
+| :--- | :--- | :--- |
+| **Glibc** (Debian/Ubuntu/RHEL/Python/Node) | `/injector/libsecrets_injector.so` or `/injector/libsecrets_injector-glibc.so` | Compiled for standard Linux GNU ABI |
+| **Musl** (Alpine Linux / Distroless) | `/injector/libsecrets_injector-musl.so` | Compiled for Alpine / musl libc ABI |
+
+Neither flavour requires `libcurl` or any external dynamic networking libraries.
 
 The image supports two execution modes:
-- **Copy & Exit (Init Container)**: Copies the library into the shared mount directory and terminates (`exit 0`).
-- **Sidecar Mode**: Copies the library and remains running in standby mode (`sleep infinity`) for pods or platforms requiring active sidecars.
+- **Copy & Exit (Init Container)**: Copies both library flavours into the shared mount directory and terminates (`exit 0`).
+- **Sidecar Mode**: Copies both library flavours and remains running in standby mode (`sleep infinity`) for pods or platforms requiring active sidecars.
 
 #### 1. Kubernetes (Init Container - Recommended)
 
@@ -430,13 +443,21 @@ Share the library using a named Docker volume:
 docker volume create injector-volume
 docker run --rm -v injector-volume:/shared ghcr.io/net-pilgrim/secrets-injector:latest
 
-# 2. Run your application container with zero changes to its Dockerfile
+# 2. For a Glibc container (Debian/Ubuntu/Python/Node):
 docker run --rm \
   -v injector-volume:/injector:ro \
   -e LD_PRELOAD=/injector/libsecrets_injector.so \
   -e SECRETS_VAULT_URL="https://vault.bitwarden.com/api/secrets" \
   -e SECRETS_FETCH_KEY="0.your_access_token..." \
   python:3.11-slim python3 -c 'import os; print("Injected secret:", os.getenv("API_KEY"))'
+
+# 3. For an Alpine Linux (Musl) container:
+docker run --rm \
+  -v injector-volume:/injector:ro \
+  -e LD_PRELOAD=/injector/libsecrets_injector-musl.so \
+  -e SECRETS_VAULT_URL="https://vault.bitwarden.com/api/secrets" \
+  -e SECRETS_FETCH_KEY="0.your_access_token..." \
+  alpine:latest sh -c 'echo "Injected secret: $API_KEY"'
 ```
 
 ---

@@ -6,9 +6,26 @@ TARGET_DIR="${TARGET_DIR:-/shared}"
 
 copy_injector() {
   dest="$1"
-  mkdir -p "$dest"
+  mkdir -p "$dest" "$dest/glibc" "$dest/musl"
+  
+  # Default shared library (glibc-compatible)
   cp -f /usr/local/lib/libsecrets_injector.so "$dest/libsecrets_injector.so"
-  echo "[secrets-injector] Copied libsecrets_injector.so -> $dest/libsecrets_injector.so"
+  
+  # Explicit GLIBC flavour
+  if [ -f /usr/local/lib/libsecrets_injector_glibc.so ]; then
+    cp -f /usr/local/lib/libsecrets_injector_glibc.so "$dest/libsecrets_injector-glibc.so"
+    cp -f /usr/local/lib/libsecrets_injector_glibc.so "$dest/glibc/libsecrets_injector.so"
+  fi
+  
+  # Explicit MUSL flavour (for Alpine Linux workloads)
+  if [ -f /usr/local/lib/libsecrets_injector_musl.so ]; then
+    cp -f /usr/local/lib/libsecrets_injector_musl.so "$dest/libsecrets_injector-musl.so"
+    cp -f /usr/local/lib/libsecrets_injector_musl.so "$dest/musl/libsecrets_injector.so"
+  fi
+
+  echo "[secrets-injector] Successfully installed secrets injector libraries to $dest/"
+  echo "  - Glibc / Universal: $dest/libsecrets_injector.so (or libsecrets_injector-glibc.so)"
+  echo "  - Musl / Alpine:     $dest/libsecrets_injector-musl.so"
 }
 
 case "$1" in
